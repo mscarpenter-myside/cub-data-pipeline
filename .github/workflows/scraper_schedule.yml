@@ -1,0 +1,271 @@
+# ============================================================================
+# CUB Data Pipeline - Automated Scraper Workflow
+# ============================================================================
+#
+# Purpose: Automatically extract CUB data from Brazilian Sinduscon websites
+#          on scheduled dates and commit the results back to the repository.
+#
+# Schedule: Runs on the 1st, 5th, 10th, 15th, 20th, 25th, and 29th of every month at 12:00 UTC
+#
+# The --auto flag tells the scraper to automatically calculate the
+# "previous month" as the target (e.g., if running on Feb 5th, target is Jan).
+#
+# Exit Codes:
+#   0 - Success (data extracted and saved)
+#   1 - Partial failure (some states failed, but others succeeded)
+#   2 - Complete failure (no data extracted)
+# ============================================================================
+
+name: CUB Monthly Scraper
+
+on:
+  # Scheduled runs: 1st, 5th, 10th, 15th, 20th, 25th, and 29th of every month at 12:00 UTC
+  # (09:00 BRT / Brasília Time)
+  schedule:
+    # ┌───────────── minute (0 - 59)
+    # │ ┌───────────── hour (0 - 23)
+    # │ │ ┌───────────── day of the month (1 - 31)
+    # │ │ │             ┌───────────── month (1 - 12)
+    # │ │ │             │ ┌───────────── day of the week (0 - 6) (Sunday to Saturday)
+    # │ │ │             │ │
+    # * * *             * *
+    - cron: '0 12 1,5,10,15,20,25,29 * *'
+  
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Target month (1-12). Leave empty for auto-calculation.'
+        required: false
+        default: ''
+        type: string
+      year:
+        description: 'Target year (e.g., 2025). Leave empty for auto-calculation.'
+        required: false
+        default: ''
+        type: string
+      states:
+        description: 'Specific states to scrape (comma-separated, e.g., SC,SP,PR). Leave empty for all.'
+        required: false
+        default: ''
+        type: string
+
+env:
+  PYTHON_VERSION: '3.11'
+  # Timezone for logging clarity
+  TZ: 'America/Sao_Paulo'
+
+jobs:
+  scrape-cub-data:
+    name: 🔄 Extract CUB Data
+    runs-on: ubuntu-latest
+    
+    # Grant write permissions to push commits
+    permissions:
+      contents: write
+    
+    steps:
+      # ========================================
+      # 1. CHECKOUT REPOSITORY
+      # ========================================
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history for proper git operations
+          fetch-depth: 0
+          # Use PAT or GITHUB_TOKEN for push
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================
+      # 2. SETUP PYTHON ENVIRONMENT
+      # ========================================
+      - name: 🐍 Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+      
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # ========================================
+      # 3. INSTALL PLAYWRIGHT BROWSER
+      # ========================================
+      - name: 🌐 Install Playwright browsers
+        run: |
+          playwright install chromium
+          playwright install-deps chromium
+      
+      # ========================================
+      # 4. CONFIGURE GIT FOR COMMITS
+      # ========================================
+      - name: ⚙️ Configure Git identity
+        run: |
+          git config --global user.name "CUB Data Bot"
+          git config --global user.email "cub-bot@github-actions.local"
+
+      # ========================================
+      # 5. RUN THE SCRAPER
+      # ========================================
+      - name: 🤖 Run CUB Scraper
+        id: scraper
+        run: |
+          echo "🕐 Start time: $(date)"
+          echo "📅 Calculating target month automatically..."
+          
+          # Build command based on inputs
+          CMD="python -m src.main"
+          
+          # Check if manual inputs are provided (workflow_dispatch)
+          if [[ -n "${{ github.event.inputs.month }}" && -n "${{ github.event.inputs.year }}" ]]; then
+            echo "📌 Using manual inputs: ${{ github.event.inputs.month }}/${{ github.event.inputs.year }}"
+            CMD="$CMD ${{ github.event.inputs.month }} ${{ github.event.inputs.year }}"
+          else
+            echo "🤖 Using AUTO mode (previous month calculation)"
+            CMD="$CMD --auto"
+          fi
+          
+          # Add states filter if provided
+          if [[ -n "${{ github.event.inputs.states }}" ]]; then
+            STATES="${{ github.event.inputs.states }}"
+            # Convert comma-separated to space-separated
+            STATES_ARGS=$(echo "$STATES" | tr ',' ' ')
+            echo "🎯 Filtering states: $STATES_ARGS"
+            CMD="$CMD --states $STATES_ARGS"
+          fi
+          
+          echo "🚀 Executing: $CMD"
+          echo "=========================================="
+          
+          # Run the scraper and capture exit code
+          set +e  # Don't exit on error
+          $CMD
+          EXIT_CODE=$?
+          set -e
+          
+          echo "=========================================="
+          echo "📊 Scraper finished with exit code: $EXIT_CODE"
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Determine if we should continue based on exit code
+          # 0 = success, 1 = partial (still commit), 2 = complete failure (don't commit)
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "❌ Complete failure. No data to commit."
+            exit 2
+          fi
+          
+          echo "✅ Proceeding to commit changes..."
+
+      # ========================================
+      # 6. CHECK FOR CHANGES
+      # ========================================
+      - name: 🔍 Check for data changes
+        id: changes
+        run: |
+          # Check if there are any changes in data/output
+          if git diff --quiet data/output/; then
+            echo "📭 No changes detected in data/output/"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "📬 Changes detected in data/output/"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Show what changed
+            echo "Changed files:"
+            git diff --name-only data/output/
+          fi
+
+      # ========================================
+      # 7. COMMIT AND PUSH CHANGES
+      # ========================================
+      - name: 📝 Commit and Push data changes
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          # Get current date for commit message
+          DATE=$(date +"%Y-%m-%d")
+          
+          # Calculate target month/year for commit message
+          # Previous month logic
+          CURRENT_MONTH=$(date +%m)
+          CURRENT_YEAR=$(date +%Y)
+          
+          if [ "$CURRENT_MONTH" -eq 1 ]; then
+            TARGET_MONTH=12
+            TARGET_YEAR=$((CURRENT_YEAR - 1))
+          else
+            TARGET_MONTH=$((10#$CURRENT_MONTH - 1))
+            TARGET_YEAR=$CURRENT_YEAR
+          fi
+          
+          # Format month with leading zero
+          TARGET_MONTH=$(printf "%02d" $TARGET_MONTH)
+          
+          # Stage only output files
+          git add data/output/*.csv
+          
+          # Create commit message
+          COMMIT_MSG="📊 CUB Data Update: ${TARGET_MONTH}/${TARGET_YEAR} (Auto-scraped on ${DATE})"
+          
+          echo "📝 Committing with message: $COMMIT_MSG"
+          git commit -m "$COMMIT_MSG"
+          
+          # Push changes
+          echo "🚀 Pushing to repository..."
+          git push
+          
+          echo "✅ Changes committed and pushed successfully!"
+
+      # ========================================
+      # 8. GENERATE SUMMARY
+      # ========================================
+      - name: 📋 Generate Job Summary
+        if: always()
+        run: |
+          EXIT_CODE="${{ steps.scraper.outputs.exit_code }}"
+          HAS_CHANGES="${{ steps.changes.outputs.has_changes }}"
+          
+          echo "## 📊 CUB Data Pipeline - Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Execution Date** | $(date '+%Y-%m-%d %H:%M:%S %Z') |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Exit Code** | ${EXIT_CODE:-N/A} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Data Changed** | ${HAS_CHANGES:-N/A} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "### ✅ Status: Success" >> $GITHUB_STEP_SUMMARY
+            echo "All scrapers executed successfully." >> $GITHUB_STEP_SUMMARY
+          elif [ "$EXIT_CODE" = "1" ]; then
+            echo "### ⚠️ Status: Partial Success" >> $GITHUB_STEP_SUMMARY
+            echo "Some scrapers failed, but data was saved." >> $GITHUB_STEP_SUMMARY
+          elif [ "$EXIT_CODE" = "2" ]; then
+            echo "### ❌ Status: Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Complete failure - no data extracted." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📁 Output Files" >> $GITHUB_STEP_SUMMARY
+          if [ -d "data/output" ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            ls -la data/output/ >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No output directory found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ========================================
+      # 9. UPLOAD ARTIFACTS (Optional backup)
+      # ========================================
+      - name: 📤 Upload CSV artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cub-data-${{ github.run_number }}
+          path: data/output/*.csv
+          retention-days: 30
+          if-no-files-found: warn

@@ -1,0 +1,52 @@
+# ============================================
+# CUB Data Pipeline - .gitignore
+# ============================================
+
+# ----- Python -----
+venv/
+env/
+.venv/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+dist/
+build/
+.Python
+
+# ----- Environment Variables -----
+.env
+.env.local
+.env.*.local
+
+# ----- IDE / Editor -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- OS Generated -----
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ----- Logs -----
+*.log
+logs/
+
+# ----- Data Files (Large) -----
+# Ignore raw PDFs to prevent repo bloat
+data/raw/*.pdf
+
+# Ignore error screenshots (keep docs/img/ if needed)
+*.png
+!docs/img/*.png
+
+# ----- Temporary Files -----
+*.tmp
+*.temp
+.cache/
