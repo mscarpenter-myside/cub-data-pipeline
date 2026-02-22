@@ -295,11 +295,20 @@ class ScraperSP(BaseScraper):
 if __name__ == "__main__":
     scraper = ScraperSP(headless=False)
     
-    # Test availability
-    available = scraper.check_availability(12, 2025)
-    print(f"Available: {available}")
+    print("=" * 60)
+    print("🔍 Testando extração automática do CUB mais recente (SP)...")
+    print("=" * 60)
     
-    if available:
-        # Test extraction
-        data = scraper.extract(12, 2025)
-        print(f"Extracted: {data}")
+    # Use extract_latest() - discovers and extracts automatically
+    data = scraper.extract_latest()
+    
+    if data:
+        print(f"\n✅ SUCESSO!")
+        print(f"   Estado: {data.estado}")
+        print(f"   Mês/Ano: {data.mes_referencia}/{data.ano_referencia}")
+        print(f"   Projeto: {data.valores[0].projeto}")
+        print(f"   Valor: R$ {data.valores[0].valor:,.2f}")
+        print(f"   Extraído em: {data.data_extracao}")
+    else:
+        print("\n❌ Falha na extração")
+

@@ -43,7 +43,7 @@ class ScraperPA(BaseScraper):
         """Initialize the PA scraper with parent attributes."""
         super().__init__(
             estado="PA",
-            base_url="https://www.sindusconpa.org.br/cub"
+            base_url="https://institucional.sindusconpa.com.br/cub-site.php"
         )
         self.headless = headless
     
@@ -301,73 +301,44 @@ class ScraperPA(BaseScraper):
         )
     
     def _parse_pdf(self, pdf_path: Path) -> float:
-        """Parse PDF using Column Isolation Strategy for R-8 Normal."""
-        logger.info(f"Parsing PDF: {pdf_path}")
+        """
+        Parse PA PDF using Stateful Section Parsing.
+        Sinduscon-PA lists values vertically under 'Padrão Normal' rather than in horizontal columns.
+        """
+        logger.info(f"Parsing PDF with Stateful Strategy: {pdf_path}")
         
+        full_text = ""
         with pdfplumber.open(str(pdf_path)) as pdf:
-            page = pdf.pages[0]
-            words = page.extract_words(keep_blank_chars=True)
+            for page in pdf.pages:
+                text = page.extract_text(layout=True)
+                if text:
+                    full_text += text + "\n"
+        
+        if not full_text:
+            raise ValueError("Could not extract any text from the PDF")
             
-            header_normal = None
-            header_baixo = None
-            header_alto = None
-            
-            for word in words:
-                text = word['text'].upper()
-                if word['top'] > page.height / 2: continue
+        in_normal_section = False
+        
+        for line in full_text.split('\n'):
+            # The PDF contains multiple sections (e.g. Normal, Desonerado). We want the first Normal.
+            # But the state can toggle if it hits another table.
+            if "Padrão Normal" in line or "Padrão  Normal" in line:
+                in_normal_section = True
+            elif "Padrão Alto" in line or "Padrão Baixo" in line:
+                in_normal_section = False
                 
-                if "NORMAL" in text and not header_normal:
-                    header_normal = word
-                elif "BAIXO" in text and not header_baixo:
-                    header_baixo = word
-                elif "ALTO" in text and not header_alto:
-                    header_alto = word
-            
-            if not header_normal:
-                return self._find_r8_fallback(page)
-            
-            norm_x0, norm_x1 = float(header_normal['x0']), float(header_normal['x1'])
-            y0, y1 = float(header_normal['top']), float(header_normal['top']) + 500
-            
-            x0 = (float(header_baixo['x1']) + norm_x0) / 2 if (header_baixo and float(header_baixo['x1']) < norm_x0) else norm_x0 - 80
-            x1 = (norm_x1 + float(header_alto['x0'])) / 2 if (header_alto and float(header_alto['x0']) > norm_x1) else norm_x1 + 80
-            
-            x0, x1 = max(0.0, x0), min(float(page.width), x1)
-            y0, y1 = max(0.0, y0), min(float(page.height), y1)
-            
-            if x0 >= x1:
-                x0, x1 = max(0.0, norm_x0 - 100), min(float(page.width), norm_x1 + 100)
-            
-            crop = page.crop((x0, y0, x1, y1))
-            text = crop.extract_text(layout=True)
-            
-            if not text: return self._find_r8_fallback(page)
-            
-            for line in text.split('\n'):
-                if re.search(r'\bR[-\s]?8\b', line, re.IGNORECASE):
-                    match = re.search(r'R-?8.*?(\d{1,3}(?:\.\d{3})*,\d{2})', line)
-                    if match: return self._parse_brl_currency(match.group(1))
+            if in_normal_section and re.search(r'\bR[-\s]?8\b', line, re.IGNORECASE):
+                logger.info(f"Found R-8 line in Normal section: '{line.strip()}'")
+                match = re.search(r'R[-\s]?8.*?(\d{1,3}(?:\.\d{3})*,\d{2})', line)
+                if match:
+                    return self._parse_brl_currency(match.group(1))
+                
+                # Fallback for just the number
+                match = re.search(r'(\d{1,3}(?:\.\d{3})*,\d{2})', line)
+                if match:
+                    return self._parse_brl_currency(match.group(1))
                     
-                    match = re.search(r'(\d{1,3}(?:\.\d{3})*,\d{2})', line)
-                    if match: return self._parse_brl_currency(match.group(1))
-            
-            return self._find_r8_fallback(page)
-    
-    def _find_r8_fallback(self, page) -> float:
-        """Fallback extraction strategy."""
-        text = page.extract_text(layout=True)
-        if not text: raise ValueError("Could not extract text from PDF")
-        
-        for line in text.split('\n'):
-            if re.search(r'\bR[-\s]?8\b', line, re.IGNORECASE):
-                match = re.search(r'R-?8.*?(\d{1,3}(?:\.\d{3})*,\d{2})', line)
-                if match: return self._parse_brl_currency(match.group(1))
-                
-                matches = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', line)
-                if len(matches) >= 2: return self._parse_brl_currency(matches[1])
-                elif matches: return self._parse_brl_currency(matches[0])
-        
-        raise ValueError("Could not extract R-8 value from PDF")
+        raise ValueError("Could not find PADRÃO NORMAL R-8 in the PDF text")
     
     @staticmethod
     def _parse_brl_currency(value_str: str) -> float:

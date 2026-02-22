@@ -1,0 +1,20 @@
+[
+  {
+    "estado": "SC",
+    "status": "success",
+    "mes_referencia": 1,
+    "ano_referencia": 2026,
+    "projeto": "R8-N",
+    "valor": 3012.64,
+    "data_extracao": "2026-02-03T12:01:29.127696"
+  },
+  {
+    "estado": "SP",
+    "status": "success",
+    "mes_referencia": 12,
+    "ano_referencia": 2025,
+    "projeto": "R8-N",
+    "valor": 2123.87,
+    "data_extracao": "2026-02-03T12:01:44.658573"
+  }
+]

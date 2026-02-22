@@ -65,7 +65,8 @@ class ScraperMG(BaseScraper):
             
             try:
                 page.goto(self.base_url, timeout=30000)
-                page.wait_for_load_state("networkidle")
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(2000)
                 self._dismiss_cookies(page)
                 
                 # 1. Check if Month is already visible (Default state for current year)
@@ -140,9 +141,9 @@ class ScraperMG(BaseScraper):
             
             try:
                 page.goto(self.base_url, timeout=30000)
-                page.wait_for_load_state("networkidle")
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(2000)
                 self._dismiss_cookies(page)
-                page.wait_for_timeout(1000)
                 
                 # 1. Expand Year Logic
                 month_pattern = re.compile(month_name, re.IGNORECASE)
